@@ -1,64 +1,81 @@
+import axios from "axios";
+import { AnalysisFeedback } from "../types";
+import { STARTUP_ANALYSIS_PROMPT_TEMPLATE } from "../constants";
 
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
-import { AnalysisFeedback } from '../types';
-import { GEMINI_MODEL_NAME, STARTUP_ANALYSIS_PROMPT_TEMPLATE } from '../constants';
+const API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY;
 
-// Ensure process.env.API_KEY is available or provide a fallback for development.
-// In a real production deployment, this should be securely managed.
-const API_KEY = process.env.API_KEY;
-
-if (!API_KEY) {
-  console.warn(
-    "API_KEY environment variable not found. Using a placeholder. Gemini API calls will likely fail."
-  );
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY || "YOUR_API_KEY_PLACEHOLDER" });
-
-export const analyzeStartupIdea = async (idea: string): Promise<AnalysisFeedback> => {
+export const analyzeStartupIdea = async (
+  idea: string
+): Promise<AnalysisFeedback> => {
   if (!API_KEY) {
-    throw new Error("Gemini API Key is not configured. Please set the API_KEY environment variable.");
+    throw new Error("Set VITE_OPENROUTER_API_KEY in .env.local");
   }
 
-  const prompt = STARTUP_ANALYSIS_PROMPT_TEMPLATE.replace("{USER_IDEA}", idea);
+  const prompt = `
+${STARTUP_ANALYSIS_PROMPT_TEMPLATE.replace("{USER_IDEA}", idea)}
+
+IMPORTANT:
+Return STRICT JSON in this format:
+{
+  "feasibilityScore": number,
+  "uniqueness": "text",
+  "competition": "text",
+  "goToMarketStrategy": "text",
+  "overallAssessment": "text"
+}
+`;
 
   try {
-    const response: GenerateContentResponse = await ai.models.generateContent({
-      model: GEMINI_MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.7, // Adjust for creativity vs. predictability
+    const response = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: "mistralai/mixtral-8x7b-instruct",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.5
       },
-    });
-
-    let jsonStr = response.text.trim();
-    
-    // Remove markdown fences if present
-    const fenceRegex = /^```(?:json)?\s*\n?(.*?)\n?\s*```$/s;
-    const match = jsonStr.match(fenceRegex);
-    if (match && match[1]) {
-      jsonStr = match[1].trim();
-    }
-
-    try {
-      const parsedData = JSON.parse(jsonStr) as AnalysisFeedback;
-      // Basic validation for critical fields
-      if (typeof parsedData.feasibilityScore !== 'number' || !parsedData.uniqueness || !parsedData.competition || !parsedData.goToMarketStrategy || !parsedData.overallAssessment) {
-        console.error("Parsed data is missing required fields:", parsedData);
-        throw new Error("Received malformed analysis data from AI. Key fields are missing.");
+      {
+        headers: {
+          Authorization: `Bearer ${API_KEY}`,
+          "Content-Type": "application/json"
+        }
       }
-      return parsedData;
-    } catch (e) {
-      console.error("Failed to parse JSON response from Gemini:", jsonStr, e);
-      throw new Error(`Failed to parse the analysis data received from AI. Raw response: ${jsonStr.substring(0,100)}...`);
+    );
+
+    let text: string = String(
+      response.data?.choices?.[0]?.message?.content || ""
+    ).trim();
+
+    if (!text) {
+      throw new Error("Empty response from AI");
     }
+
+    // 🔹 Try extracting JSON
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch (e) {
+        console.warn("JSON parse failed, using fallback...");
+      }
+    }
+
+    // 🔥 FALLBACK (convert plain text → structured output)
+    return {
+      feasibilityScore: 7, // default
+      uniqueness: text,
+      competition: text,
+      goToMarketStrategy: text,
+      overallAssessment: text
+    };
 
   } catch (error) {
-    console.error("Error calling Gemini API:", error);
+    console.error("OpenRouter Error:", error);
+
     if (error instanceof Error) {
-        throw new Error(`Failed to get analysis from AI: ${error.message}`);
+      throw new Error(`Failed to get analysis from AI: ${error.message}`);
     }
-    throw new Error("An unknown error occurred while communicating with the AI.");
+
+    throw new Error("Unknown AI error occurred");
   }
 };

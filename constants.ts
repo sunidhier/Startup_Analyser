@@ -1,5 +1,5 @@
 
-export const GEMINI_MODEL_NAME = "gemini-2.5-flash-preview-04-17";
+export const GEMINI_MODEL_NAME = "gemini-2.0-flash";
 
 export const STARTUP_ANALYSIS_PROMPT_TEMPLATE = `
 You are an expert startup analyst. A user will provide their startup idea.
